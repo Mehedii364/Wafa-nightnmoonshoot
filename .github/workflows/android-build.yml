@@ -1,0 +1,77 @@
+name: Android Build & APK Packaging
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    paths-ignore:
+      - '**.md'
+      - '.build-outputs/**'
+      - 'APK_DOWNLOAD/**'
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Debug APK & Run Automated Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Run Unit Tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Verify & Package APK
+        run: |
+          mkdir -p .build-outputs APK_DOWNLOAD
+          APK_PATH=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "ERROR: Debug APK not found in build outputs!"
+            exit 1
+          fi
+          echo "Found APK at: $APK_PATH"
+          cp "$APK_PATH" .build-outputs/app-debug.apk
+          cp "$APK_PATH" APK_DOWNLOAD/app-debug.apk
+          
+          # Validation
+          ls -lh .build-outputs/app-debug.apk APK_DOWNLOAD/app-debug.apk
+          file APK_DOWNLOAD/app-debug.apk
+          unzip -t APK_DOWNLOAD/app-debug.apk > /dev/null
+          sha256sum .build-outputs/app-debug.apk APK_DOWNLOAD/app-debug.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: APK_DOWNLOAD/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit APK to Repository Code Browser
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f .build-outputs/app-debug.apk APK_DOWNLOAD/app-debug.apk
+          git diff --cached --quiet || git commit -m "build: update debug APK binary [skip ci]"
+          git push || echo "Push skipped or not permitted in current checkout."
